@@ -3,12 +3,11 @@ import pandas as pd
 import spacy
 import os
 import gdown
-from annoy import AnnoyIndex
 import numpy as np
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from sklearn.neighbors import NearestNeighbors
 import time
 import torch
+import hnswlib
 
 # Load models
 try:
@@ -54,7 +53,12 @@ ingredient_vectors, filtered_ingredient_list = compute_embeddings()
 # Build Annoy Index (Fast Approximate Nearest Neighbors)
 @st.cache_resource
 def build_annoy_index():
-    return NearestNeighbors(n_neighbors=4, metric='cosine').fit(ingredient_vectors)
+    dim = ingredient_vectors.shape[1]
+    index = hnswlib.Index(space='cosine', dim=dim)
+    index.init_index(max_elements=len(ingredient_vectors), ef_construction=200, M=16)
+    index.add_items(ingredient_vectors)
+    index.set_ef(50)
+    return index
 
 annoy_index = build_annoy_index()
 
@@ -80,12 +84,12 @@ def direct_search_alternatives(ingredient):
 
 #  Annoy Search (Fixed for Correct Cosine Similarity)
 def annoy_search_alternatives(ingredient):
-    input_vec = nlp(ingredient.lower()).vector
+    input_vec = nlp(ingredient.lower()).vector.reshape(1, -1).astype(np.float32)
 
-    _, indices = annoy_index.kneighbors([input_vec], n_neighbors=4)  # Get top 4 to account for the ingredient itself
-
+    indices, _ = annoy_index.knn_query(input_vec, k=4)
     alternatives = [
-        filtered_ingredient_list[i] for i in indices[0] if filtered_ingredient_list[i].lower() != ingredient.lower()
+        filtered_ingredient_list[i] for i in indices[0]
+        if filtered_ingredient_list[i].lower().strip() != ingredient.lower().strip()
     ]
 
     return alternatives[:3]  # Return top 3 alternatives
